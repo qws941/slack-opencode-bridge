@@ -9,10 +9,12 @@ export interface SessionStore {
   setSession(threadTs: string, sessionId: string, channelId: string): void;
   getSession(threadTs: string): SessionMapping | null;
   deleteSession(threadTs: string): void;
+  cleanupExpiredSessions(maxAgeSeconds: number): number;
+  getAllSessions(): Array<{ threadTs: string; sessionId: string; channelId: string }>;
 }
 
 export interface StreamRenderer {
-  start(sessionId: string, channel: string, messageTs: string): void;
+  start(sessionId: string, channel: string, messageTs: string, threadTs: string): void;
   stop(sessionId: string): void;
 }
 
@@ -29,6 +31,10 @@ export interface ChatUpdateClient {
       text: string;
       thread_ts?: string;
     }): Promise<unknown>;
+  };
+  reactions: {
+    add(args: { channel: string; timestamp: string; name: string }): Promise<unknown>;
+    remove(args: { channel: string; timestamp: string; name: string }): Promise<unknown>;
   };
 }
 

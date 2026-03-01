@@ -59,7 +59,12 @@ export function registerMessageHandler(
         ? working.ts
         : event.thread_ts;
 
-    dependencies.streamRenderer.start(session.sessionId, event.channel, messageTs);
+    dependencies.streamRenderer.start(
+      session.sessionId,
+      event.channel,
+      messageTs,
+      event.thread_ts,
+    );
 
     void sendPrompt(session.sessionId, event.text).catch(async (error) => {
       console.error("Failed to send follow-up prompt", error);

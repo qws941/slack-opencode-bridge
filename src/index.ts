@@ -8,6 +8,10 @@ const app = createApp({
   sessionStore,
   streamRenderer: new SlackStreamRenderer(appClientShim()),
 });
+const cleanupInterval = setInterval(() => {
+  const removed = sessionStore.cleanupExpiredSessions(config.SESSION_TIMEOUT_SECONDS);
+  console.log(`[cleanup] removed ${removed} expired sessions`);
+}, config.CLEANUP_INTERVAL_MS);
 
 function appClientShim() {
   return {
@@ -16,6 +20,12 @@ function appClientShim() {
         app.client.chat.update(args),
       postMessage: (args: { channel: string; text: string; thread_ts?: string }) =>
         app.client.chat.postMessage(args),
+    },
+    reactions: {
+      add: (args: { channel: string; timestamp: string; name: string }) =>
+        app.client.reactions.add(args),
+      remove: (args: { channel: string; timestamp: string; name: string }) =>
+        app.client.reactions.remove(args),
     },
   };
 }
@@ -53,6 +63,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
 
   console.log(`[shutdown] received ${signal}`);
+  clearInterval(cleanupInterval);
   await app.stop();
   process.exit(0);
 }

@@ -1,12 +1,16 @@
 import { config } from "../config.js";
 import type { ChatUpdateClient, OpenCodeEvent, StreamRenderer } from "../types.js";
+import { formatDiff } from "./diff-formatter.js";
 import { formatMessage } from "./formatter.js";
 import { subscribeEvents } from "./opencode-client.js";
 
 type ActiveSession = {
   channel: string;
   messageTs: string;
+  threadTs: string;
   latestText: string;
+  latestTodoText: string | null;
+  todoMessageTs: string | null;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -17,13 +21,17 @@ export class SlackStreamRenderer implements StreamRenderer {
 
   public constructor(private readonly slackClient: ChatUpdateClient) {}
 
-  public start(sessionId: string, channel: string, messageTs: string): void {
+  public start(sessionId: string, channel: string, messageTs: string, threadTs: string): void {
     this.sessions.set(sessionId, {
       channel,
       messageTs,
+      threadTs,
       latestText: "",
+      latestTodoText: null,
+      todoMessageTs: null,
       timer: null,
     });
+    void this.safeAddReaction(sessionId, "blue_circle");
     this.ensureStreamLoop();
   }
 
@@ -37,6 +45,7 @@ export class SlackStreamRenderer implements StreamRenderer {
       clearTimeout(existing.timer);
     }
     this.sessions.delete(sessionId);
+    void this.safeRemoveReaction(sessionId, existing.channel, existing.threadTs, "blue_circle");
   }
 
   private ensureStreamLoop(): void {
@@ -78,11 +87,36 @@ export class SlackStreamRenderer implements StreamRenderer {
       }
 
       const part = this.readPart(event);
-      if (!part || part.type !== "text") {
+      if (!part) {
         return;
       }
 
-      session.latestText = part.text;
+      if (part.type !== "text" && part.type !== "diff") {
+        return;
+      }
+
+      session.latestText = part.type === "diff" ? formatDiff(part.text) : part.text;
+      this.scheduleFlush(sessionId);
+      return;
+    }
+
+    if (event.type === "todo.updated") {
+      const sessionId = this.readSessionId(event);
+      if (!sessionId) {
+        return;
+      }
+
+      const session = this.sessions.get(sessionId);
+      if (!session) {
+        return;
+      }
+
+      const todoItems = this.readTodos(event);
+      if (todoItems.length === 0) {
+        return;
+      }
+
+      session.latestTodoText = this.formatTodoChecklist(todoItems);
       this.scheduleFlush(sessionId);
       return;
     }
@@ -92,6 +126,8 @@ export class SlackStreamRenderer implements StreamRenderer {
       if (!sessionId) {
         return;
       }
+      await this.safeRemoveReaction(sessionId, undefined, undefined, "blue_circle");
+      await this.safeAddReaction(sessionId, "white_check_mark");
       await this.flush(sessionId);
       this.stop(sessionId);
       return;
@@ -109,13 +145,56 @@ export class SlackStreamRenderer implements StreamRenderer {
       }
 
       const errorMessage = this.readErrorMessage(event) ?? "Unknown OpenCode session error";
+      await this.safeRemoveReaction(sessionId, session.channel, session.threadTs, "blue_circle");
+      await this.safeAddReaction(sessionId, "x");
       await this.slackClient.chat.postMessage({
         channel: session.channel,
-        thread_ts: session.messageTs,
+        thread_ts: session.threadTs,
         text: `❌ Session error: ${errorMessage}`,
       });
 
       this.stop(sessionId);
+    }
+  }
+
+  private async safeAddReaction(sessionId: string, reaction: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    await this.safeReactionCall("add", session.channel, session.threadTs, reaction);
+  }
+
+  private async safeRemoveReaction(
+    sessionId: string,
+    channel: string | undefined,
+    threadTs: string | undefined,
+    reaction: string,
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    const reactionChannel = channel ?? session?.channel;
+    const reactionThreadTs = threadTs ?? session?.threadTs;
+    if (!reactionChannel || !reactionThreadTs) {
+      return;
+    }
+    await this.safeReactionCall("remove", reactionChannel, reactionThreadTs, reaction);
+  }
+
+  private async safeReactionCall(
+    mode: "add" | "remove",
+    channel: string,
+    timestamp: string,
+    name: string,
+  ): Promise<void> {
+    try {
+      if (mode === "add") {
+        await this.slackClient.reactions.add({ channel, timestamp, name });
+        return;
+      }
+
+      await this.slackClient.reactions.remove({ channel, timestamp, name });
+    } catch (error) {
+      console.warn(`[stream] failed to ${mode} reaction ${name}`, error);
     }
   }
 
@@ -147,6 +226,8 @@ export class SlackStreamRenderer implements StreamRenderer {
       ts: session.messageTs,
       text,
     });
+
+    await this.flushTodo(session);
   }
 
   private readSessionId(event: OpenCodeEvent): string | null {
@@ -162,6 +243,33 @@ export class SlackStreamRenderer implements StreamRenderer {
     return value;
   }
 
+  private async flushTodo(session: ActiveSession): Promise<void> {
+    if (!session.latestTodoText) {
+      return;
+    }
+
+    if (session.todoMessageTs) {
+      await this.slackClient.chat.update({
+        channel: session.channel,
+        ts: session.todoMessageTs,
+        text: session.latestTodoText,
+      });
+      return;
+    }
+
+    const response = await this.slackClient.chat.postMessage({
+      channel: session.channel,
+      thread_ts: session.threadTs,
+      text: session.latestTodoText,
+    });
+
+    const postedTs =
+      response && typeof response === "object" ? Reflect.get(response, "ts") : undefined;
+    if (typeof postedTs === "string" && postedTs.length > 0) {
+      session.todoMessageTs = postedTs;
+    }
+  }
+
   private readPart(event: OpenCodeEvent): { type: string; text: string } | null {
     const properties = event.properties;
     if (!properties) {
@@ -175,11 +283,65 @@ export class SlackStreamRenderer implements StreamRenderer {
 
     const partType = Reflect.get(part, "type");
     const partText = Reflect.get(part, "text");
-    if (typeof partType !== "string" || typeof partText !== "string") {
+    const partDiff = Reflect.get(part, "diff");
+    const textValue =
+      typeof partText === "string"
+        ? partText
+        : typeof partDiff === "string"
+          ? partDiff
+          : null;
+
+    if (typeof partType !== "string" || textValue === null) {
       return null;
     }
 
-    return { type: partType, text: partText };
+    return { type: partType, text: textValue };
+  }
+
+  private readTodos(event: OpenCodeEvent): Array<{ content: string; status: string }> {
+    const properties = event.properties;
+    if (!properties) {
+      return [];
+    }
+
+    const todos = Reflect.get(properties, "todos");
+    if (!Array.isArray(todos)) {
+      return [];
+    }
+
+    const items: Array<{ content: string; status: string }> = [];
+    for (const todo of todos) {
+      if (!todo || typeof todo !== "object") {
+        continue;
+      }
+
+      const content = Reflect.get(todo, "content");
+      const status = Reflect.get(todo, "status");
+      if (typeof content !== "string" || typeof status !== "string") {
+        continue;
+      }
+
+      items.push({ content, status });
+    }
+
+    return items;
+  }
+
+  private formatTodoChecklist(todos: Array<{ content: string; status: string }>): string {
+    const lines = todos.map((todo) => {
+      const status = todo.status.toLowerCase();
+      if (status === "done" || status === "completed") {
+        return `☑️ ${todo.content}`;
+      }
+
+      if (status === "in_progress" || status === "in-progress" || status === "doing") {
+        return `🔄 ${todo.content}`;
+      }
+
+      return `⬜ ${todo.content}`;
+    });
+
+    return lines.join("\n");
   }
 
   private readErrorMessage(event: OpenCodeEvent): string | null {

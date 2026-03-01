@@ -4,8 +4,10 @@ import { config } from "../config.js";
 import type { SessionMapping, SessionStore } from "../types.js";
 
 type SessionRow = {
+  thread_ts: string;
   session_id: string;
   channel_id: string;
+  created_at: number;
 };
 
 export class SqliteSessionStore implements SessionStore {
@@ -68,5 +70,35 @@ export class SqliteSessionStore implements SessionStore {
         `,
       )
       .run(threadTs);
+  }
+
+  public cleanupExpiredSessions(maxAgeSeconds: number): number {
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM sessions
+          WHERE created_at < unixepoch() - ?
+        `,
+      )
+      .run(maxAgeSeconds);
+
+    return Number(result.changes);
+  }
+
+  public getAllSessions(): Array<{ threadTs: string; sessionId: string; channelId: string }> {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT thread_ts, session_id, channel_id, created_at
+          FROM sessions
+        `,
+      )
+      .all() as SessionRow[];
+
+    return rows.map((row) => ({
+      threadTs: row.thread_ts,
+      sessionId: row.session_id,
+      channelId: row.channel_id,
+    }));
   }
 }

@@ -58,7 +58,7 @@ export function registerMentionHandler(
           ? working.ts
           : threadTs;
 
-      dependencies.streamRenderer.start(sessionId, event.channel, messageTs);
+      dependencies.streamRenderer.start(sessionId, event.channel, messageTs, threadTs);
 
       void sendPrompt(sessionId, promptText).catch(async (error) => {
         console.error("Failed to send initial prompt", error);
