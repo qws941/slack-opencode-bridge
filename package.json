@@ -1,0 +1,24 @@
+{
+  "name": "slack-opencode-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4",
+    "@opencode-ai/sdk": "latest",
+    "better-sqlite3": "^11"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1",
+    "@types/better-sqlite3": "^7",
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

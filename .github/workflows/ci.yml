@@ -1,0 +1,15 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  ci:
+    uses: qws941/.github/.github/workflows/_ci-node.yml@master
+    with:
+      node-version: "22"
+      run-lint: true
+      run-test: false
+    secrets: inherit
