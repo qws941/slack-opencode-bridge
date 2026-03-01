@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import type {
   ChatUpdateClient,
   OpenCodeEvent,
+  SessionStore,
   StreamRenderer,
 } from "../types.js";
 import { formatDiff } from "./diff-formatter.js";
@@ -36,7 +37,10 @@ export class SlackStreamRenderer implements StreamRenderer {
   private streamTask: Promise<void> | null = null;
   private running = false;
 
-  public constructor(private readonly slackClient: ChatUpdateClient) {}
+  public constructor(
+    private readonly slackClient: ChatUpdateClient,
+    private readonly sessionStore: SessionStore,
+  ) {}
 
   public start(
     sessionId: string,
@@ -134,6 +138,19 @@ export class SlackStreamRenderer implements StreamRenderer {
 
       const part = this.readPart(event);
       if (!part) {
+        return;
+      }
+
+      if (part.type === "step-finish") {
+        const usage = this.readStepFinishUsage(part.rawPart);
+        if (usage) {
+          this.sessionStore.updateCost(
+            session.threadTs,
+            usage.cost,
+            usage.inputTokens,
+            usage.outputTokens,
+          );
+        }
         return;
       }
 
@@ -424,7 +441,7 @@ export class SlackStreamRenderer implements StreamRenderer {
 
   private readPart(
     event: OpenCodeEvent,
-  ): { type: string; text: string } | null {
+  ): { type: string; text: string; rawPart: object } | null {
     const properties = event.properties;
     if (!properties) {
       return null;
@@ -445,11 +462,51 @@ export class SlackStreamRenderer implements StreamRenderer {
           ? partDiff
           : null;
 
-    if (typeof partType !== "string" || textValue === null) {
+    if (typeof partType !== "string") {
       return null;
     }
 
-    return { type: partType, text: textValue };
+    if (partType === "step-finish") {
+      return { type: partType, text: "", rawPart: part };
+    }
+
+    if (textValue === null) {
+      return null;
+    }
+
+    return { type: partType, text: textValue, rawPart: part };
+  }
+
+  private readStepFinishUsage(
+    part: object,
+  ): { cost: number; inputTokens: number; outputTokens: number } | null {
+    const costValue = Reflect.get(part, "cost");
+    const tokensValue = Reflect.get(part, "tokens");
+    if (!tokensValue || typeof tokensValue !== "object") {
+      return null;
+    }
+
+    const inputValue = Reflect.get(tokensValue, "input");
+    const outputValue = Reflect.get(tokensValue, "output");
+
+    const cost =
+      typeof costValue === "number" && Number.isFinite(costValue)
+        ? costValue
+        : 0;
+    const inputTokens =
+      typeof inputValue === "number" && Number.isFinite(inputValue)
+        ? inputValue
+        : 0;
+    const outputTokens =
+      typeof outputValue === "number" && Number.isFinite(outputValue)
+        ? outputValue
+        : 0;
+
+    return {
+      cost,
+      inputTokens,
+      outputTokens,
+    };
   }
 
   private readTodos(

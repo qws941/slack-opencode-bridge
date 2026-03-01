@@ -7,7 +7,7 @@ import { SlackStreamRenderer } from "./services/stream-renderer.js";
 const sessionStore = new SqliteSessionStore(config.DB_PATH);
 const app = createApp({
   sessionStore,
-  streamRenderer: new SlackStreamRenderer(appClientShim()),
+  streamRenderer: new SlackStreamRenderer(appClientShim(), sessionStore),
 });
 const cleanupInterval = setInterval(() => {
   const removed = sessionStore.cleanupExpiredSessions(

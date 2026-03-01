@@ -2,6 +2,7 @@ import { App } from "@slack/bolt";
 
 import { config } from "./config.js";
 import { registerActionHandler } from "./handlers/action.js";
+import { registerCommandHandler } from "./handlers/command.js";
 import { registerMentionHandler } from "./handlers/mention.js";
 import { registerMessageHandler } from "./handlers/message.js";
 import { registerReactionHandler } from "./handlers/reaction.js";
@@ -19,6 +20,7 @@ export function createApp(dependencies: HandlerDependencies): App {
   registerMessageHandler(app, dependencies);
   registerReactionHandler(app, dependencies);
   registerActionHandler(app, dependencies);
+  registerCommandHandler(app, dependencies);
 
   return app;
 }

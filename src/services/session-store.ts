@@ -1,13 +1,24 @@
 import Database from "better-sqlite3";
 
 import { config } from "../config.js";
-import type { SessionMapping, SessionStore } from "../types.js";
+import type {
+  SessionCostSummary,
+  SessionMapping,
+  SessionStore,
+} from "../types.js";
 
 type SessionRow = {
   thread_ts: string;
   session_id: string;
   channel_id: string;
   created_at: number;
+  total_cost: number;
+  input_tokens: number;
+  output_tokens: number;
+};
+
+type TableInfoRow = {
+  name: string;
 };
 
 export class SqliteSessionStore implements SessionStore {
@@ -27,6 +38,8 @@ export class SqliteSessionStore implements SessionStore {
       `,
       )
       .run();
+
+    this.ensureCostColumns();
   }
 
   public setSession(
@@ -50,7 +63,7 @@ export class SqliteSessionStore implements SessionStore {
     const row = this.db
       .prepare(
         `
-          SELECT session_id, channel_id
+          SELECT session_id, channel_id, total_cost, input_tokens, output_tokens
           FROM sessions
           WHERE thread_ts = ?
         `,
@@ -64,6 +77,67 @@ export class SqliteSessionStore implements SessionStore {
     return {
       sessionId: row.session_id,
       channelId: row.channel_id,
+      totalCost: row.total_cost,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+    };
+  }
+
+  public updateCost(
+    threadTs: string,
+    cost: number,
+    inputTokens: number,
+    outputTokens: number,
+  ): void {
+    this.db
+      .prepare(
+        `
+          UPDATE sessions
+          SET
+            total_cost = total_cost + ?,
+            input_tokens = input_tokens + ?,
+            output_tokens = output_tokens + ?
+          WHERE thread_ts = ?
+        `,
+      )
+      .run(cost, inputTokens, outputTokens, threadTs);
+  }
+
+  public getCostSummary(): SessionCostSummary {
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            COALESCE(SUM(total_cost), 0) AS total_cost,
+            COALESCE(SUM(input_tokens), 0) AS total_input,
+            COALESCE(SUM(output_tokens), 0) AS total_output,
+            COUNT(*) AS session_count
+          FROM sessions
+        `,
+      )
+      .get() as
+      | {
+          total_cost: number;
+          total_input: number;
+          total_output: number;
+          session_count: number;
+        }
+      | undefined;
+
+    if (!row) {
+      return {
+        totalCost: 0,
+        totalInput: 0,
+        totalOutput: 0,
+        sessionCount: 0,
+      };
+    }
+
+    return {
+      totalCost: row.total_cost,
+      totalInput: row.total_input,
+      totalOutput: row.total_output,
+      sessionCount: row.session_count,
     };
   }
 
@@ -95,12 +169,24 @@ export class SqliteSessionStore implements SessionStore {
     threadTs: string;
     sessionId: string;
     channelId: string;
+    createdAt: number;
+    totalCost: number;
+    inputTokens: number;
+    outputTokens: number;
   }> {
     const rows = this.db
       .prepare(
         `
-          SELECT thread_ts, session_id, channel_id, created_at
+          SELECT
+            thread_ts,
+            session_id,
+            channel_id,
+            created_at,
+            total_cost,
+            input_tokens,
+            output_tokens
           FROM sessions
+          ORDER BY created_at DESC
         `,
       )
       .all() as SessionRow[];
@@ -109,6 +195,44 @@ export class SqliteSessionStore implements SessionStore {
       threadTs: row.thread_ts,
       sessionId: row.session_id,
       channelId: row.channel_id,
+      createdAt: row.created_at,
+      totalCost: row.total_cost,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
     }));
+  }
+
+  private ensureCostColumns(): void {
+    if (!this.hasColumn("total_cost")) {
+      this.db
+        .prepare(
+          "ALTER TABLE sessions ADD COLUMN total_cost REAL NOT NULL DEFAULT 0",
+        )
+        .run();
+    }
+
+    if (!this.hasColumn("input_tokens")) {
+      this.db
+        .prepare(
+          "ALTER TABLE sessions ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+        )
+        .run();
+    }
+
+    if (!this.hasColumn("output_tokens")) {
+      this.db
+        .prepare(
+          "ALTER TABLE sessions ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+        )
+        .run();
+    }
+  }
+
+  private hasColumn(columnName: string): boolean {
+    const rows = this.db
+      .prepare("PRAGMA table_info(sessions)")
+      .all() as TableInfoRow[];
+
+    return rows.some((row) => row.name === columnName);
   }
 }

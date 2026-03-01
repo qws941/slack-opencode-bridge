@@ -3,17 +3,38 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export interface SessionMapping {
   sessionId: string;
   channelId: string;
+  totalCost?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface SessionCostSummary {
+  totalCost: number;
+  totalInput: number;
+  totalOutput: number;
+  sessionCount: number;
 }
 
 export interface SessionStore {
   setSession(threadTs: string, sessionId: string, channelId: string): void;
   getSession(threadTs: string): SessionMapping | null;
+  updateCost(
+    threadTs: string,
+    cost: number,
+    inputTokens: number,
+    outputTokens: number,
+  ): void;
+  getCostSummary(): SessionCostSummary;
   deleteSession(threadTs: string): void;
   cleanupExpiredSessions(maxAgeSeconds: number): number;
   getAllSessions(): Array<{
     threadTs: string;
     sessionId: string;
     channelId: string;
+    createdAt: number;
+    totalCost: number;
+    inputTokens: number;
+    outputTokens: number;
   }>;
 }
 
