@@ -45,7 +45,9 @@ export function registerMentionHandler(
     }
 
     try {
-      const sessionId = await createSession(`Slack ${new Date().toISOString()}`);
+      const sessionId = await createSession(
+        `Slack ${new Date().toISOString()}`,
+      );
       dependencies.sessionStore.setSession(threadTs, sessionId, event.channel);
 
       const working = await say({
@@ -58,7 +60,12 @@ export function registerMentionHandler(
           ? working.ts
           : threadTs;
 
-      dependencies.streamRenderer.start(sessionId, event.channel, messageTs, threadTs);
+      dependencies.streamRenderer.start(
+        sessionId,
+        event.channel,
+        messageTs,
+        threadTs,
+      );
 
       void sendPrompt(sessionId, promptText).catch(async (error) => {
         console.error("Failed to send initial prompt", error);

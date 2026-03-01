@@ -14,7 +14,10 @@ export function formatMarkdown(markdown: string): string {
   // Bold: **text** → *text*
   output = output.replace(/\*\*(.+?)\*\*/g, "*$1*");
   // Italic: *text* → _text_ (only when not inside bold)
-  output = output.replace(/(^|\W)\*(?!\s)([^*\n]+?)(?!\s)\*(?=\W|$)/g, "$1_$2_");
+  output = output.replace(
+    /(^|\W)\*(?!\s)([^*\n]+?)(?!\s)\*(?=\W|$)/g,
+    "$1_$2_",
+  );
   // Links: [label](url) → <url|label>
   output = output.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "<$2|$1>");
   // Headings: # text → *text*
@@ -51,7 +54,8 @@ export function splitMessage(markdown: string): string[] {
   while (remaining.length > 0) {
     const isFirst = chunks.length === 0;
     const prefix = isFirst ? "" : CONTINUATION_PREFIX;
-    const suffix = remaining.length > SLACK_CHAR_LIMIT ? CONTINUATION_SUFFIX : "";
+    const suffix =
+      remaining.length > SLACK_CHAR_LIMIT ? CONTINUATION_SUFFIX : "";
     const budget = SLACK_CHAR_LIMIT - prefix.length - suffix.length;
 
     if (remaining.length <= SLACK_CHAR_LIMIT - prefix.length) {

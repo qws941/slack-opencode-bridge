@@ -1,8 +1,17 @@
 import { config } from "../config.js";
-import type { ChatUpdateClient, OpenCodeEvent, StreamRenderer } from "../types.js";
+import type {
+  ChatUpdateClient,
+  OpenCodeEvent,
+  StreamRenderer,
+} from "../types.js";
 import { formatDiff } from "./diff-formatter.js";
 import { formatMessage } from "./formatter.js";
-import { subscribeEvents } from "./opencode-client.js";
+import { resolvePermission, subscribeEvents } from "./opencode-client.js";
+import {
+  type PermissionRequest,
+  buildPermissionBlocks,
+  buildPermissionResolvedBlocks,
+} from "./permission-blocks.js";
 
 type ActiveSession = {
   channel: string;
@@ -14,14 +23,27 @@ type ActiveSession = {
   timer: ReturnType<typeof setTimeout> | null;
 };
 
+type PendingPermission = {
+  permission: PermissionRequest;
+  channel: string;
+  messageTs: string;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export class SlackStreamRenderer implements StreamRenderer {
   private readonly sessions = new Map<string, ActiveSession>();
+  private readonly pendingPermissions = new Map<string, PendingPermission>();
   private streamTask: Promise<void> | null = null;
   private running = false;
 
   public constructor(private readonly slackClient: ChatUpdateClient) {}
 
-  public start(sessionId: string, channel: string, messageTs: string, threadTs: string): void {
+  public start(
+    sessionId: string,
+    channel: string,
+    messageTs: string,
+    threadTs: string,
+  ): void {
     this.sessions.set(sessionId, {
       channel,
       messageTs,
@@ -44,8 +66,32 @@ export class SlackStreamRenderer implements StreamRenderer {
     if (existing.timer) {
       clearTimeout(existing.timer);
     }
+
+    for (const [permissionId, pending] of this.pendingPermissions.entries()) {
+      if (pending.permission.sessionID !== sessionId) {
+        continue;
+      }
+      clearTimeout(pending.timer);
+      this.pendingPermissions.delete(permissionId);
+    }
+
     this.sessions.delete(sessionId);
-    void this.safeRemoveReaction(sessionId, existing.channel, existing.threadTs, "blue_circle");
+    void this.safeRemoveReaction(
+      sessionId,
+      existing.channel,
+      existing.threadTs,
+      "blue_circle",
+    );
+  }
+
+  public cancelPermissionTimeout(permissionId: string): void {
+    const pending = this.pendingPermissions.get(permissionId);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timer);
+    this.pendingPermissions.delete(permissionId);
   }
 
   private ensureStreamLoop(): void {
@@ -95,7 +141,8 @@ export class SlackStreamRenderer implements StreamRenderer {
         return;
       }
 
-      session.latestText = part.type === "diff" ? formatDiff(part.text) : part.text;
+      session.latestText =
+        part.type === "diff" ? formatDiff(part.text) : part.text;
       this.scheduleFlush(sessionId);
       return;
     }
@@ -126,7 +173,12 @@ export class SlackStreamRenderer implements StreamRenderer {
       if (!sessionId) {
         return;
       }
-      await this.safeRemoveReaction(sessionId, undefined, undefined, "blue_circle");
+      await this.safeRemoveReaction(
+        sessionId,
+        undefined,
+        undefined,
+        "blue_circle",
+      );
       await this.safeAddReaction(sessionId, "white_check_mark");
       await this.flush(sessionId);
       this.stop(sessionId);
@@ -144,8 +196,14 @@ export class SlackStreamRenderer implements StreamRenderer {
         return;
       }
 
-      const errorMessage = this.readErrorMessage(event) ?? "Unknown OpenCode session error";
-      await this.safeRemoveReaction(sessionId, session.channel, session.threadTs, "blue_circle");
+      const errorMessage =
+        this.readErrorMessage(event) ?? "Unknown OpenCode session error";
+      await this.safeRemoveReaction(
+        sessionId,
+        session.channel,
+        session.threadTs,
+        "blue_circle",
+      );
       await this.safeAddReaction(sessionId, "x");
       await this.slackClient.chat.postMessage({
         channel: session.channel,
@@ -154,15 +212,102 @@ export class SlackStreamRenderer implements StreamRenderer {
       });
 
       this.stop(sessionId);
+      return;
+    }
+
+    if (event.type === "permission.updated") {
+      const permission = this.readPermission(event);
+      if (!permission) {
+        return;
+      }
+
+      const session = this.sessions.get(permission.sessionID);
+      if (!session) {
+        return;
+      }
+
+      const blocks = buildPermissionBlocks(permission);
+      const text = formatMessage(`Permission requested: ${permission.title}`);
+      const response = await this.slackClient.chat.postMessage({
+        channel: session.channel,
+        thread_ts: session.threadTs,
+        text,
+        blocks,
+      });
+
+      const postedTs =
+        response && typeof response === "object"
+          ? Reflect.get(response, "ts")
+          : undefined;
+      if (typeof postedTs !== "string" || postedTs.length === 0) {
+        return;
+      }
+
+      this.cancelPermissionTimeout(permission.id);
+      const timer = setTimeout(() => {
+        void this.handlePermissionTimeout(permission.id);
+      }, config.PERMISSION_TIMEOUT_MS);
+
+      this.pendingPermissions.set(permission.id, {
+        permission,
+        channel: session.channel,
+        messageTs: postedTs,
+        timer,
+      });
     }
   }
 
-  private async safeAddReaction(sessionId: string, reaction: string): Promise<void> {
+  private async handlePermissionTimeout(permissionId: string): Promise<void> {
+    const pending = this.pendingPermissions.get(permissionId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingPermissions.delete(permissionId);
+
+    try {
+      await resolvePermission(
+        pending.permission.sessionID,
+        permissionId,
+        "reject",
+      );
+    } catch (error) {
+      console.error("Failed to auto-deny permission", error);
+      return;
+    }
+
+    const blocks = buildPermissionResolvedBlocks(
+      pending.permission,
+      "reject",
+      "auto-deny timeout",
+    );
+
+    try {
+      await this.slackClient.chat.update({
+        channel: pending.channel,
+        ts: pending.messageTs,
+        text: `Permission ${permissionId} auto-denied after 5 minutes`,
+        blocks,
+      });
+    } catch (error) {
+      console.error("Failed to update auto-denied permission message", error);
+    }
+  }
+
+  private async safeAddReaction(
+    sessionId: string,
+    reaction: string,
+  ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
     }
-    await this.safeReactionCall("add", session.channel, session.threadTs, reaction);
+    await this.safeReactionCall(
+      "add",
+      session.channel,
+      session.threadTs,
+      reaction,
+    );
   }
 
   private async safeRemoveReaction(
@@ -177,7 +322,12 @@ export class SlackStreamRenderer implements StreamRenderer {
     if (!reactionChannel || !reactionThreadTs) {
       return;
     }
-    await this.safeReactionCall("remove", reactionChannel, reactionThreadTs, reaction);
+    await this.safeReactionCall(
+      "remove",
+      reactionChannel,
+      reactionThreadTs,
+      reaction,
+    );
   }
 
   private async safeReactionCall(
@@ -264,13 +414,17 @@ export class SlackStreamRenderer implements StreamRenderer {
     });
 
     const postedTs =
-      response && typeof response === "object" ? Reflect.get(response, "ts") : undefined;
+      response && typeof response === "object"
+        ? Reflect.get(response, "ts")
+        : undefined;
     if (typeof postedTs === "string" && postedTs.length > 0) {
       session.todoMessageTs = postedTs;
     }
   }
 
-  private readPart(event: OpenCodeEvent): { type: string; text: string } | null {
+  private readPart(
+    event: OpenCodeEvent,
+  ): { type: string; text: string } | null {
     const properties = event.properties;
     if (!properties) {
       return null;
@@ -298,7 +452,9 @@ export class SlackStreamRenderer implements StreamRenderer {
     return { type: partType, text: textValue };
   }
 
-  private readTodos(event: OpenCodeEvent): Array<{ content: string; status: string }> {
+  private readTodos(
+    event: OpenCodeEvent,
+  ): Array<{ content: string; status: string }> {
     const properties = event.properties;
     if (!properties) {
       return [];
@@ -327,14 +483,20 @@ export class SlackStreamRenderer implements StreamRenderer {
     return items;
   }
 
-  private formatTodoChecklist(todos: Array<{ content: string; status: string }>): string {
+  private formatTodoChecklist(
+    todos: Array<{ content: string; status: string }>,
+  ): string {
     const lines = todos.map((todo) => {
       const status = todo.status.toLowerCase();
       if (status === "done" || status === "completed") {
         return `☑️ ${todo.content}`;
       }
 
-      if (status === "in_progress" || status === "in-progress" || status === "doing") {
+      if (
+        status === "in_progress" ||
+        status === "in-progress" ||
+        status === "doing"
+      ) {
         return `🔄 ${todo.content}`;
       }
 
@@ -352,5 +514,57 @@ export class SlackStreamRenderer implements StreamRenderer {
 
     const value = properties.error;
     return typeof value === "string" ? value : null;
+  }
+
+  private readPermission(event: OpenCodeEvent): PermissionRequest | null {
+    const properties = event.properties;
+    if (!properties || typeof properties !== "object") {
+      return null;
+    }
+
+    const id = Reflect.get(properties, "id");
+    const type = Reflect.get(properties, "type");
+    const pattern = Reflect.get(properties, "pattern");
+    const sessionID = Reflect.get(properties, "sessionID");
+    const title = Reflect.get(properties, "title");
+    const metadataValue = Reflect.get(properties, "metadata");
+    const timeValue = Reflect.get(properties, "time");
+
+    if (
+      typeof id !== "string" ||
+      typeof type !== "string" ||
+      typeof sessionID !== "string" ||
+      typeof title !== "string"
+    ) {
+      return null;
+    }
+
+    const metadata: Record<string, unknown> =
+      metadataValue && typeof metadataValue === "object"
+        ? (metadataValue as Record<string, unknown>)
+        : {};
+
+    let created = Date.now();
+    if (timeValue && typeof timeValue === "object") {
+      const createdValue = Reflect.get(timeValue, "created");
+      if (typeof createdValue === "number" && Number.isFinite(createdValue)) {
+        created = createdValue;
+      }
+    }
+
+    const normalizedPattern =
+      typeof pattern === "string" || Array.isArray(pattern)
+        ? pattern
+        : undefined;
+
+    return {
+      id,
+      type,
+      pattern: normalizedPattern,
+      sessionID,
+      title,
+      metadata,
+      time: { created },
+    };
   }
 }

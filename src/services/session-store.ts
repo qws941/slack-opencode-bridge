@@ -15,8 +15,9 @@ export class SqliteSessionStore implements SessionStore {
 
   public constructor(dbPath: string = config.DB_PATH) {
     this.db = new Database(dbPath);
-    this.db.prepare(
-      `
+    this.db
+      .prepare(
+        `
         CREATE TABLE IF NOT EXISTS sessions (
           thread_ts TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -24,10 +25,15 @@ export class SqliteSessionStore implements SessionStore {
           created_at INTEGER DEFAULT (unixepoch())
         )
       `,
-    ).run();
+      )
+      .run();
   }
 
-  public setSession(threadTs: string, sessionId: string, channelId: string): void {
+  public setSession(
+    threadTs: string,
+    sessionId: string,
+    channelId: string,
+  ): void {
     this.db
       .prepare(
         `
@@ -85,7 +91,11 @@ export class SqliteSessionStore implements SessionStore {
     return Number(result.changes);
   }
 
-  public getAllSessions(): Array<{ threadTs: string; sessionId: string; channelId: string }> {
+  public getAllSessions(): Array<{
+    threadTs: string;
+    sessionId: string;
+    channelId: string;
+  }> {
     const rows = this.db
       .prepare(
         `

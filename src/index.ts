@@ -9,17 +9,27 @@ const app = createApp({
   streamRenderer: new SlackStreamRenderer(appClientShim()),
 });
 const cleanupInterval = setInterval(() => {
-  const removed = sessionStore.cleanupExpiredSessions(config.SESSION_TIMEOUT_SECONDS);
+  const removed = sessionStore.cleanupExpiredSessions(
+    config.SESSION_TIMEOUT_SECONDS,
+  );
   console.log(`[cleanup] removed ${removed} expired sessions`);
 }, config.CLEANUP_INTERVAL_MS);
 
 function appClientShim() {
   return {
     chat: {
-      update: (args: { channel: string; ts: string; text: string }) =>
-        app.client.chat.update(args),
-      postMessage: (args: { channel: string; text: string; thread_ts?: string }) =>
-        app.client.chat.postMessage(args),
+      update: (args: {
+        channel: string;
+        ts: string;
+        text: string;
+        blocks?: Array<Record<string, unknown>>;
+      }) => app.client.chat.update(args),
+      postMessage: (args: {
+        channel: string;
+        text: string;
+        thread_ts?: string;
+        blocks?: Array<Record<string, unknown>>;
+      }) => app.client.chat.postMessage(args),
     },
     reactions: {
       add: (args: { channel: string; timestamp: string; name: string }) =>
@@ -44,9 +54,12 @@ function startHealthServer(): void {
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/health") {
-        return new Response(JSON.stringify({ status: "ok", uptime: process.uptime() }), {
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ status: "ok", uptime: process.uptime() }),
+          {
+            headers: { "content-type": "application/json" },
+          },
+        );
       }
       return new Response("Not Found", { status: 404 });
     },

@@ -1,6 +1,7 @@
 import { App } from "@slack/bolt";
 
 import { config } from "./config.js";
+import { registerActionHandler } from "./handlers/action.js";
 import { registerMentionHandler } from "./handlers/mention.js";
 import { registerMessageHandler } from "./handlers/message.js";
 import { registerReactionHandler } from "./handlers/reaction.js";
@@ -17,10 +18,7 @@ export function createApp(dependencies: HandlerDependencies): App {
   registerMentionHandler(app, dependencies);
   registerMessageHandler(app, dependencies);
   registerReactionHandler(app, dependencies);
-
-  app.error(async (error) => {
-    console.error("Slack app error", error);
-  });
+  registerActionHandler(app, dependencies);
 
   return app;
 }

@@ -31,7 +31,10 @@ export async function createSession(title: string): Promise<string> {
   return readSessionId(response);
 }
 
-export async function sendPrompt(sessionId: string, text: string): Promise<void> {
+export async function sendPrompt(
+  sessionId: string,
+  text: string,
+): Promise<void> {
   await client.session.promptAsync({
     path: { id: sessionId },
     body: {
@@ -49,7 +52,20 @@ export async function abortSession(sessionId: string): Promise<void> {
   await client.session.abort({ path: { id: sessionId } });
 }
 
-function isAsyncIterable(value: unknown): value is AsyncIterable<OpenCodeEvent> {
+export async function resolvePermission(
+  sessionId: string,
+  permissionId: string,
+  response: "once" | "always" | "reject",
+): Promise<void> {
+  await client.postSessionIdPermissionsPermissionId({
+    path: { id: sessionId, permissionID: permissionId },
+    body: { response },
+  });
+}
+
+function isAsyncIterable(
+  value: unknown,
+): value is AsyncIterable<OpenCodeEvent> {
   if (!value || typeof value !== "object") {
     return false;
   }
