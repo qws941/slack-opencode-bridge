@@ -5,11 +5,24 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    uses: qws941/.github/.github/workflows/_ci-node.yml@master
-    with:
-      node-version: "22"
-      run-lint: true
-      run-test: false
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4e0352ce0b84eadb15be4aa9ab5fdb95 # v6
+
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
