@@ -1,5 +1,6 @@
 import { createApp } from "./app.js";
 import { config } from "./config.js";
+import { handleGlitchTipWebhook } from "./handlers/webhook.js";
 import { SqliteSessionStore } from "./services/session-store.js";
 import { SlackStreamRenderer } from "./services/stream-renderer.js";
 
@@ -37,6 +38,9 @@ function appClientShim() {
       remove: (args: { channel: string; timestamp: string; name: string }) =>
         app.client.reactions.remove(args),
     },
+    conversations: {
+      open: (args: { users: string }) => app.client.conversations.open(args),
+    },
   };
 }
 
@@ -53,6 +57,13 @@ function startHealthServer(): void {
     port: config.HEALTH_PORT,
     fetch(req) {
       const url = new URL(req.url);
+      if (url.pathname === "/webhooks/glitchtip" && req.method === "POST") {
+        return handleGlitchTipWebhook(req, appClientShim(), {
+          notificationChannel: config.NOTIFICATION_CHANNEL,
+          alertDmUserId: config.ALERT_DM_USER_ID,
+          webhookSecret: config.GLITCHTIP_WEBHOOK_SECRET,
+        });
+      }
       if (url.pathname === "/health") {
         return new Response(
           JSON.stringify({ status: "ok", uptime: process.uptime() }),

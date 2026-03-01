@@ -60,6 +60,9 @@ export interface ChatUpdateClient {
       name: string;
     }): Promise<unknown>;
   };
+  conversations: {
+    open(args: { users: string }): Promise<unknown>;
+  };
 }
 
 export type OpenCodeEvent = {
