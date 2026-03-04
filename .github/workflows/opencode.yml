@@ -8,9 +8,6 @@ on:
 
 permissions:
   id-token: write
-  contents: write
-  pull-requests: write
-  issues: write
 
 jobs:
   opencode:
@@ -20,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: anomalyco/opencode/github@latest
         with:
           model: google/gemini-2.5-pro
