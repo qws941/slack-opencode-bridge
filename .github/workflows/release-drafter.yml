@@ -1,0 +1,19 @@
+# Release Drafter
+# SSoT: qws941/.github — synced to all repos
+# Synced via: .github/sync.yml
+# Template: _release-drafter.yml
+
+name: Release Drafter
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  draft:
+    uses: qws941/.github/.github/workflows/_release-drafter.yml@master

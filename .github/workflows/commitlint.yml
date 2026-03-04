@@ -1,0 +1,17 @@
+# Commit Lint
+# SSoT: qws941/.github — synced to all repos
+# Synced via: .github/sync.yml
+# Template: _commitlint.yml
+
+name: Commit Lint
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  commitlint:
+    uses: qws941/.github/.github/workflows/_commitlint.yml@master
